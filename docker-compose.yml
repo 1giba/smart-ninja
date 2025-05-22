@@ -1,0 +1,17 @@
+services:
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    restart: unless-stopped
+    entrypoint: >
+      sh -c "ollama serve &
+      while ! ollama list > /dev/null 2>&1; do sleep 1; done
+      && ollama pull llama3
+      && fg"
+
+volumes:
+  ollama_data:

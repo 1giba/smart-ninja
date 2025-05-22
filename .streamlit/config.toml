@@ -1,0 +1,28 @@
+# SmartNinja Streamlit Configuration
+
+[theme]
+# Modern dark theme with cyber green accent
+primaryColor="#50FA7B"          # Bright green for primary actions
+backgroundColor="#1B2A41"      # Deep blue-black background
+secondaryBackgroundColor="#2E2E2E" # Dark grey for cards/sections
+textColor="#FFFFFF"            # White text for readability
+font="sans serif"              # Clean, modern font
+
+[server]
+port = 8501                    # Default Streamlit port
+address = "0.0.0.0"            # Listen on all network interfaces
+enableXsrfProtection = true    # Security: Enable XSRF protection
+enableCORS = true              # Security: Must be true when XSRF is enabled
+
+[browser]
+serverAddress = "localhost"    # Default local address (overridden in production)
+gatherUsageStats = false       # Privacy: Don't gather usage stats
+
+[runner]
+# Note: Runner options have been simplified for compatibility
+
+[logger]
+level = "info"                 # Logging level for production
+
+[client]
+showErrorDetails = false       # Security: Hide error details in production
