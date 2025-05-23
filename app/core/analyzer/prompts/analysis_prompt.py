@@ -13,16 +13,22 @@ class PriceAnalysisPromptGenerator(PromptGenerator):
     Creates structured prompts requesting specific types of analysis.
     """
 
-    def generate_prompt(self, formatted_data: str) -> str:
+    def generate_prompt(self, formatted_data: str, include_justification: bool = False) -> str:
         """
         Generate a prompt for the LLM to analyze price data.
 
         Args:
             formatted_data: Formatted price data string
+            include_justification: Whether to include detailed justification in the prompt
 
         Returns:
             Complete prompt to send to the LLM
         """
+        # If justification is requested, use the detailed prompt
+        if include_justification:
+            return self.generate_prompt_with_justification(formatted_data)
+            
+        # Otherwise use the standard prompt
         return f"""Analyze the following mobile phone price data and provide insights:
 
 {formatted_data}

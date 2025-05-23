@@ -49,6 +49,7 @@ class OpenAIClient(AsyncLLMClient):
         model: Optional[str] = None,
         timeout: Optional[int] = None,
         client: Optional[Any] = None,
+        **kwargs  # Accept additional parameters for flexibility
     ):
         """
         Initialize the OpenAI client.
@@ -58,6 +59,7 @@ class OpenAIClient(AsyncLLMClient):
             model: Optional custom OpenAI model name
             timeout: Optional custom request timeout in seconds
             client: Optional pre-configured client (for testing)
+            **kwargs: Additional parameters (ignored if not supported by AsyncOpenAI)
         """
         self.api_key = api_key or OPENAI_API_KEY
         self.model = model or OPENAI_MODEL
@@ -74,7 +76,18 @@ class OpenAIClient(AsyncLLMClient):
         elif self.api_key:
             # Use OpenAI with API key
             try:
-                self.client = AsyncOpenAI(api_key=self.api_key, timeout=self.timeout)
+                # Only pass parameters that AsyncOpenAI accepts
+                # Create a whitelist of supported parameters
+                supported_params = {
+                    "api_key": self.api_key,
+                    "timeout": self.timeout,
+                    # Add other supported parameters as needed
+                }
+                
+                # Filter out any parameters not supported by AsyncOpenAI
+                # This prevents errors with parameters like 'proxies' that may be passed
+                # from higher-level code but aren't supported by the AsyncOpenAI client
+                self.client = AsyncOpenAI(**supported_params)
                 self.client_available = True
                 logger.info("OpenAIClient initialized with model=%s", self.model)
             except Exception as error:

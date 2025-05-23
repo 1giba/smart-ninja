@@ -200,12 +200,22 @@ def insights_section(model: str, results: List[dict]):
         recommendation_adapter = RecommendationAgentAdapter()
 
         # Prepare input for recommendation
+        # Handle case where analysis_result is a string instead of a dictionary
+        if isinstance(analysis_result, dict):
+            average_price = analysis_result.get("average_price", 0)
+            price_trend = analysis_result.get("price_trend", "stable")
+        else:
+            # If analysis_result is not a dictionary (e.g., it's a string), use default values
+            logging.info(f"Analysis result is not a dictionary: {type(analysis_result)}, using defaults")
+            average_price = 0
+            price_trend = "stable"
+            
         recommendation_input = {
             "price_data": results,
             "model": model,
             "analysis": analysis_result,
-            "average_price": analysis_result.get("average_price", 0),
-            "price_trend": analysis_result.get("price_trend", "stable"),
+            "average_price": average_price,
+            "price_trend": price_trend,
             "store_count": len(set(item.get("store", "") for item in results))
         }
 
@@ -217,14 +227,19 @@ def insights_section(model: str, results: List[dict]):
         status.empty()
 
         # Create results dictionary for UI display
-        analysis_data = {
-            "analysis_result": analysis_result,
-            "recommendation_result": recommendation_result,
-            "scraping_result": results
-        }
-
-        # Display the insights
-        display_ai_insights(results, analysis_data)
+        # Handle the case where analysis_result is a string instead of a dictionary
+        if isinstance(analysis_result, str):
+            # If analysis_result is a string, we need to pass just the results to display_ai_insights
+            # as it will handle string analysis results appropriately
+            display_ai_insights(results)
+        else:
+            # For dictionary results, ensure we're passing properly formatted data
+            analysis_data = {
+                "recommendation": recommendation_result
+            }
+            
+            # Display the insights with the correctly formatted data
+            display_ai_insights(results, analysis_data)
 
         # Show the full agent pipeline visualization if we have all the data
         if analysis_result and recommendation_result:

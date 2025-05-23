@@ -36,7 +36,8 @@ class PriceHistoryRepository(ABC):
 
     @abstractmethod
     async def get_history_for_model(
-        self, model: str, country: str, days: int = 30, cursor: Optional[str] = None, limit: int = 100
+        self, model: str, country: str, days: int = 30, cursor: Optional[str] = None, limit: int = 100,
+        start_date: Optional[datetime] = None, end_date: Optional[datetime] = None
     ) -> List[Dict[str, Any]]:
         """
         Retrieve price history for a model in a specific country asynchronously.
@@ -47,6 +48,8 @@ class PriceHistoryRepository(ABC):
             days: Number of days of history to retrieve (default: 30).
             cursor: Optional pagination cursor.
             limit: Maximum number of entries to return (default: 100).
+            start_date: Optional start date for filtering entries.
+            end_date: Optional end date for filtering entries.
 
         Returns:
             List of price entries sorted by timestamp (newest first).
@@ -55,7 +58,8 @@ class PriceHistoryRepository(ABC):
 
     # Legacy method for backward compatibility
     def get_price_history(
-        self, model: str, country: str, days: int = 30
+        self, model: str, country: str, days: int = 30, start_date: Optional[datetime] = None,
+        end_date: Optional[datetime] = None
     ) -> List[Dict[str, Any]]:
         """
         Legacy synchronous method for retrieving price history.
@@ -67,12 +71,16 @@ class PriceHistoryRepository(ABC):
             model: The model to retrieve history for.
             country: The country code.
             days: Number of days of history to retrieve (default: 30).
+            start_date: Optional start date for filtering entries.
+            end_date: Optional end date for filtering entries.
 
         Returns:
             List of price entries sorted by timestamp (newest first).
         """
         logger.warning("Using deprecated synchronous get_price_history method")
-        return asyncio.run(self.get_history_for_model(model, country, days))
+        return asyncio.run(self.get_history_for_model(
+            model, country, days, start_date=start_date, end_date=end_date
+        ))
 
 
 class SQLitePriceHistoryRepository(PriceHistoryRepository):
@@ -86,27 +94,54 @@ class SQLitePriceHistoryRepository(PriceHistoryRepository):
             db_path: Path to the SQLite database file.
         """
         import sqlite3
+        import threading
         from pathlib import Path
 
         self.db_path = db_path
         self.sqlite3 = sqlite3
+        # Thread-local storage for database connections
+        self.local = threading.local()
 
         # Ensure the directory exists
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
 
-        # Connect to the database and create tables if they don't exist
-        self.conn = sqlite3.connect(db_path)
-        self._create_tables()
+        # Create tables on initialization
+        with self._get_connection() as conn:
+            self._create_tables(conn)
+            
         logger.info(f"Initialized SQLite repository at {db_path}")
 
     def __del__(self):
         """Ensure database connection is closed when object is garbage collected."""
-        if hasattr(self, 'conn'):
-            self.conn.close()
+        # No need to explicitly close connections as they are managed by _get_connection context
 
-    def _create_tables(self):
+    def _get_connection(self):
+        """Get a thread-local database connection using context manager."""
+        import contextlib
+
+        @contextlib.contextmanager
+        def connect():
+            # Create a new connection if it doesn't exist for this thread
+            if not hasattr(self.local, 'conn'):
+                self.local.conn = self.sqlite3.connect(self.db_path)
+                # Enable foreign keys
+                self.local.conn.execute('PRAGMA foreign_keys = ON')
+
+            try:
+                yield self.local.conn
+            except Exception as e:
+                self.local.conn.rollback()
+                logger.error(f"SQLite operation failed: {e}")
+                raise
+            finally:
+                # Don't close the connection - keep it for thread reuse
+                pass
+
+        return connect()
+
+    def _create_tables(self, conn):
         """Create the necessary tables if they don't exist."""
-        cursor = self.conn.cursor()
+        cursor = conn.cursor()
         cursor.execute(
             """
             CREATE TABLE IF NOT EXISTS price_history (
@@ -131,7 +166,7 @@ class SQLitePriceHistoryRepository(PriceHistoryRepository):
             CREATE INDEX IF NOT EXISTS idx_timestamp ON price_history (timestamp)
             """
         )
-        self.conn.commit()
+        conn.commit()
         cursor.close()
 
     async def store_price_entry(self, price_entry: Dict[str, Any]) -> str:
@@ -178,17 +213,20 @@ class SQLitePriceHistoryRepository(PriceHistoryRepository):
         if isinstance(timestamp, datetime):
             timestamp = timestamp.isoformat()
 
-        # Insert into database
-        cursor = self.conn.cursor()
-        cursor.execute(
-            """
-            INSERT INTO price_history (id, model, price, currency, source, country, url, timestamp)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (entry_id, model, price, currency, source, country, url, timestamp),
-        )
-        self.conn.commit()
-        cursor.close()
+        # Insert into database using thread-local connection
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                INSERT INTO price_history (id, model, price, currency, source, country, url, timestamp)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (entry_id, model, price, currency, source, country, url, timestamp),
+            )
+            conn.commit()
+            cursor.close()
+            
+            return entry_id
 
         logger.info(
             f"Stored price entry for {model} in {country}: {currency} {price} (ID: {entry_id})"
@@ -196,7 +234,8 @@ class SQLitePriceHistoryRepository(PriceHistoryRepository):
         return entry_id
 
     async def get_history_for_model(
-        self, model: str, country: str, days: int = 30, cursor: Optional[str] = None, limit: int = 100
+        self, model: str, country: str, days: int = 30, cursor: Optional[str] = None, limit: int = 100,
+        start_date: Optional[datetime] = None, end_date: Optional[datetime] = None
     ) -> List[Dict[str, Any]]:
         """
         Retrieve price history from the SQLite database asynchronously.
@@ -209,6 +248,8 @@ class SQLitePriceHistoryRepository(PriceHistoryRepository):
             days: Number of days of history to retrieve (default: 30).
             cursor: Optional pagination cursor (offset).
             limit: Maximum number of entries to return (default: 100).
+            start_date: Optional start date for filtering entries.
+            end_date: Optional end date for filtering entries.
 
         Returns:
             List of price entries sorted by timestamp (newest first).
@@ -216,16 +257,14 @@ class SQLitePriceHistoryRepository(PriceHistoryRepository):
         # Run database operations in a thread pool
         loop = asyncio.get_event_loop()
         return await loop.run_in_executor(
-            None, self._get_history_for_model_sync, model, country, days, cursor, limit
+            None, self._get_history_for_model_sync, model, country, days, cursor, limit, start_date, end_date
         )
 
     def _get_history_for_model_sync(
-        self, model: str, country: str, days: int = 30, cursor: Optional[str] = None, limit: int = 100
+        self, model: str, country: str, days: int = 30, cursor: Optional[str] = None, limit: int = 100,
+        start_date: Optional[datetime] = None, end_date: Optional[datetime] = None
     ) -> List[Dict[str, Any]]:
         """Synchronous implementation of get_history_for_model for thread pool execution."""
-        # Calculate the cutoff date
-        cutoff_date = (datetime.now() - timedelta(days=days)).isoformat()
-        
         # Parse cursor as offset if provided
         offset = 0
         if cursor:
@@ -233,33 +272,70 @@ class SQLitePriceHistoryRepository(PriceHistoryRepository):
                 offset = int(cursor)
             except ValueError:
                 logger.warning(f"Invalid cursor format: {cursor}, using offset 0")
-
-        # Query the database
-        cursor = self.conn.cursor()
-        query = """
+                
+        # Prepare query parameters
+        query_params = [model, country]
+        
+        # Base query
+        base_query = """
             SELECT id, model, price, currency, source, country, url, timestamp
             FROM price_history
-            WHERE model = ? AND country = ? AND timestamp >= ?
+            WHERE model = ? AND country = ?
+        """
+        
+        # Handle date filtering
+        date_conditions = []
+        
+        # If explicit dates are provided, use them instead of days
+        if start_date:
+            if isinstance(start_date, str):
+                start_date = datetime.fromisoformat(start_date)
+            date_conditions.append("timestamp >= ?")
+            query_params.append(start_date.isoformat())
+            
+        if end_date:
+            if isinstance(end_date, str):
+                end_date = datetime.fromisoformat(end_date)
+            date_conditions.append("timestamp <= ?")
+            query_params.append(end_date.isoformat())
+            
+        # If no explicit dates, use days parameter
+        if not date_conditions:
+            cutoff_date = (datetime.now() - timedelta(days=days)).isoformat()
+            date_conditions.append("timestamp >= ?")
+            query_params.append(cutoff_date)
+            
+        # Add date conditions to query
+        if date_conditions:
+            base_query += " AND " + " AND ".join(date_conditions)
+            
+        # Add sorting and limits
+        base_query += """
             ORDER BY timestamp DESC
             LIMIT ? OFFSET ?
         """
-        cursor.execute(query, (model, country, cutoff_date, limit, offset))
+        query_params.extend([limit, offset])
         
-        # Convert rows to dictionaries
+        # Query the database using thread-local connection
         result = []
-        for row in cursor.fetchall():
-            result.append({
-                "id": row[0],
-                "model": row[1],
-                "price": row[2],
-                "currency": row[3],
-                "source": row[4],
-                "country": row[5],
-                "url": row[6],
-                "timestamp": row[7],
-            })
-        
-        cursor.close()
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(base_query, tuple(query_params))
+            
+            # Convert rows to dictionaries
+            for row in cursor.fetchall():
+                result.append({
+                    "id": row[0],
+                    "model": row[1],
+                    "price": row[2],
+                    "currency": row[3],
+                    "source": row[4],
+                    "country": row[5],
+                    "url": row[6],
+                    "timestamp": row[7],
+                })
+            
+            cursor.close()
         return result
 
 
@@ -589,6 +665,29 @@ class WebhookAlertNotifier(AlertNotifier):
 
 class PriceHistoryAnalyzer:
     """Analyzes price history data and computes metrics."""
+
+    async def compute_metrics(self, price_entries: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """
+        Backward compatibility method that delegates to calculate_metrics.
+        This implementation properly handles both awaited and non-awaited calls to avoid warnings.
+        """
+        import asyncio
+        import inspect
+        
+        logger.info("Using deprecated compute_metrics method, use calculate_metrics instead")
+        
+        # Get the current coroutine or create a new event loop if not in a coroutine
+        try:
+            # If this method is awaited, return the awaitable result
+            if inspect.iscoroutinefunction(self.calculate_metrics):
+                return await self.calculate_metrics(price_entries)
+            else:
+                # If calculate_metrics is not a coroutine function, just call it directly
+                return self.calculate_metrics(price_entries)
+        except RuntimeError:
+            # If we're not in a coroutine context, run in a new event loop
+            logger.warning("compute_metrics called without await - this is deprecated")
+            return asyncio.run(self.calculate_metrics(price_entries))
 
     async def calculate_metrics(self, price_entries: List[Dict[str, Any]]) -> Dict[str, Any]:
         """

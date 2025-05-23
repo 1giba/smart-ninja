@@ -197,7 +197,7 @@ async def handle_store_action(
         history = await repository.get_price_history(model)
         
         # Compute metrics
-        metrics = analyzer.compute_metrics(history)
+        metrics = await analyzer.compute_metrics(history)
         
         # Check for alerts if rules provided
         alerts_triggered = []
@@ -260,12 +260,17 @@ async def handle_get_history_action(
         "data": {}
     }
 
-    # Check for required model parameter
+    # Check for required model and country parameters
     if "model" not in params:
         response["message"] = "Missing required parameter: 'model'"
         return response
+        
+    if "country" not in params:
+        response["message"] = "Missing required parameter: 'country'"
+        return response
 
     model = params["model"]
+    country = params["country"]
     
     # Get optional parameters with defaults
     days = params.get("days", 30)
@@ -288,14 +293,16 @@ async def handle_get_history_action(
             start_datetime = end_datetime - timedelta(days=days)
         
         # Get price history with filters
-        history = await repository.get_price_history(
-            model,
+        # Using the correct method name and ensuring it's properly awaited
+        history = await repository.get_history_for_model(
+            model=model,
+            country=country,
             start_date=start_datetime,
             end_date=end_datetime
         )
         
         # Compute metrics
-        metrics = analyzer.compute_metrics(history)
+        metrics = await analyzer.compute_metrics(history)
         
         # Build successful response
         response["status"] = "success"
@@ -305,6 +312,7 @@ async def handle_get_history_action(
             "metrics": metrics,
             "filters": {
                 "model": model,
+                "country": country,
                 "start_date": start_datetime.isoformat() if start_datetime else None,
                 "end_date": end_datetime.isoformat() if end_datetime else None
             }

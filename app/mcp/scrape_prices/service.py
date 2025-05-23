@@ -129,7 +129,8 @@ async def scrape_prices_service(params: Dict) -> Dict:
         
         # Process and normalize results
         if raw_results:
-            normalized_results = result_normalizer.normalize(raw_results, model, country)
+            # Ensure we properly await the normalize method call
+            normalized_results = await result_normalizer.normalize(raw_results, model, country)
             response["status"] = "success"
             response["message"] = f"Successfully scraped {len(normalized_results)} price entries"
             response["data"] = normalized_results
